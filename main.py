@@ -545,6 +545,10 @@ class RouteToFacilityRequest(BaseModel):
 # ENDPOINTS
 # ============================================================================
 
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "Pasig Health Backend"}
+
 @app.get("/health")
 def health_check():
     return {"status": "ok", "graph_loaded": road_graph is not None}
