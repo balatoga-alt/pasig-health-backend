@@ -499,8 +499,7 @@ app = FastAPI(title="Pasig Health Facility Router (BMSSP)")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://loquacious-tapioca-1a72db.netlify.app",
-        "https://pasig-health-backend.onrender.com",
+        "https://pasig-health-finder.netlify.app",
         "http://localhost:8000",
         "http://localhost:*",
     ],
