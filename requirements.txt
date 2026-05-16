@@ -1,0 +1,7 @@
+fastapi 
+uvicorn 
+osmnx 
+pandas 
+openpyxl 
+networkx 
+scikit-learn 
