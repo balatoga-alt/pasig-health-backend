@@ -496,6 +496,15 @@ HEALTH_FACILITIES = [
 
 app = FastAPI(title="Pasig Health Facility Router (BMSSP)")
 
+from fastapi import Response
+from starlette.requests import Request
+
+@app.middleware("http")
+async def handle_head_requests(request: Request, call_next):
+    if request.method == "HEAD":
+        return Response(status_code=200)
+    return await call_next(request)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -545,11 +554,11 @@ class RouteToFacilityRequest(BaseModel):
 # ENDPOINTS
 # ============================================================================
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {"status": "ok", "service": "Pasig Health Backend"}
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health_check():
     return {"status": "ok", "graph_loaded": road_graph is not None}
 
