@@ -14,6 +14,16 @@ from typing import Optional, Tuple, List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from functools import lru_cache
+
+# Simple in-memory cache
+_route_cache = {}
+
+def get_cached_route(user_node: str, facility_node: str):
+    key = (user_node, facility_node)
+    if key not in _route_cache:
+        _route_cache[key] = road_graph.shortest_path_bmssp(user_node, facility_node)
+    return _route_cache[key]
 
 # ============================================================================
 # YOUR BMSSP ALGORITHM (copied directly from ssp_algo.py — do not modify)
@@ -392,7 +402,7 @@ def load_graph_from_excel(filepath: str) -> Optional[SemiDirectedGraph]:
 import math
 
 # Global node coordinate lookup: { "1": {"lat": 14.57, "lng": 121.08}, ... }
-node_coords_map: dict = {}
+_route_cache: dict = {}
 
 
 def _projected_to_latlng(x: float, y: float):
@@ -462,6 +472,12 @@ def get_nearest_node(lat: float, lng: float) -> str:
             best_node = node_id
     return best_node
 
+def get_cached_route(user_node: str, facility_node: str):
+    """Return cached route if available, otherwise compute and cache it."""
+    key = (user_node, facility_node)
+    if key not in _route_cache:
+        _route_cache[key] = road_graph.shortest_path_bmssp(user_node, facility_node)
+    return _route_cache[key]
 
 def get_node_coords(node_id_str: str) -> dict:
     """Returns lat/lng for a node ID string."""
@@ -571,31 +587,20 @@ def list_facilities():
 
 @app.post("/nearest-facility")
 def nearest_facility(req: LocationRequest):
-    """
-    Find the nearest health facility using BMSSP algorithm.
-    Accepts user lat/lng, returns the shortest path and destination.
-    """
     if road_graph is None:
         raise HTTPException(status_code=503, detail="Road graph not loaded")
 
     user_node = get_nearest_node(req.lat, req.lng)
 
-    best_result = None
-    best_distance = float('inf')
+    from concurrent.futures import ThreadPoolExecutor
 
-    for facility in HEALTH_FACILITIES:
-        facility_node = get_nearest_node(facility["lat"], facility["lng"])
-
-        result = road_graph.shortest_path_bmssp(user_node, facility_node)
-        if result is None:
-            continue
-
-        distance, path_node_ids = result
-
-        if distance < best_distance:
-            best_distance = distance
-
-            # Convert node IDs to lat/lng coordinates
+    def compute_facility_route(facility):
+        try:
+            facility_node = get_nearest_node(facility["lat"], facility["lng"])
+            result = get_cached_route(user_node, facility_node)
+            if result is None:
+                return None
+            distance, path_node_ids = result
             path_coords = []
             for node_id_str in path_node_ids:
                 try:
@@ -603,19 +608,29 @@ def nearest_facility(req: LocationRequest):
                     path_coords.append(coords)
                 except Exception:
                     continue
-
-            best_result = {
+            return {
                 "facility": facility["name"],
-                "distance": round(distance, 4),   # unit = whatever your edge weights are (meters/seconds)
-                "path": path_coords,               # list of {"lat": ..., "lng": ...}
+                "distance": round(distance, 4),
+                "path": path_coords,
                 "destination": {
                     "lat": facility["lat"],
                     "lng": facility["lng"],
                 },
+                "_distance_raw": distance
             }
+        except Exception:
+            return None
 
-    if best_result is None:
+    with ThreadPoolExecutor(max_workers=14) as executor:
+        results = list(executor.map(compute_facility_route, HEALTH_FACILITIES))
+
+    valid_results = [r for r in results if r is not None]
+
+    if not valid_results:
         raise HTTPException(status_code=404, detail="No reachable facility found")
+
+    best_result = min(valid_results, key=lambda x: x["_distance_raw"])
+    best_result.pop("_distance_raw")
 
     return best_result
 
@@ -631,7 +646,7 @@ def route_to_specific_facility(req: RouteToFacilityRequest):
     user_node = get_nearest_node(req.user_lat, req.user_lng)
     facility_node = get_nearest_node(req.facility_lat, req.facility_lng)
 
-    result = road_graph.shortest_path_bmssp(user_node, facility_node)
+    result = get_cached_route(user_node, facility_node)
 
     if result is None:
         raise HTTPException(status_code=404, detail=f"No path found to {req.facility_name}")
