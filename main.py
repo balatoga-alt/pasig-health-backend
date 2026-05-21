@@ -426,22 +426,22 @@ def _projected_to_latlng(x: float, y: float):
     return math.degrees(lat), math.degrees(lon)
 
 
-def load_node_coordinates(filepath: str) -> dict:
+def load_node_coordinates_dense(filepath: str) -> dict:
+    """Load node coordinates that are already in lat/lng format."""
     coords = {}
     try:
         df = pd.read_excel(filepath)
         df.columns = df.columns.str.strip()
         for _, row in df.iterrows():
-            node_id = str(int(row['node_id']))
-            x = float(row['x'])
-            y = float(row['y'])
-            lat, lng = _projected_to_latlng(x, y)
-            coords[node_id] = {"lat": lat, "lng": lng}
+            node_id = str(row['node_id'])
+            coords[node_id] = {
+                "lat": float(row['lat']),
+                "lng": float(row['lng'])
+            }
         print(f"✓ Node coordinates loaded: {len(coords)} nodes")
     except Exception as e:
         print(f"✗ Failed to load node coordinates: {e}")
     return coords
-
 
 def get_nearest_node(lat: float, lng: float) -> str:
     best_node = None
@@ -515,12 +515,11 @@ async def handle_head_requests(request: Request, call_next):
 @app.on_event("startup")
 def startup_event():
     global road_graph, node_coords_map
-    EXCEL_PATH = "final_edge_layer.xlsx"
+    EXCEL_PATH = "final_edge_layer_dense.xlsx"
     road_graph = load_graph_from_excel(EXCEL_PATH)
-    NODES_PATH = "nodes_with_coordinates.xlsx"
-    node_coords_map = load_node_coordinates(NODES_PATH)
+    NODES_PATH = "nodes_with_coordinates_dense.xlsx"
+    node_coords_map = load_node_coordinates_dense(NODES_PATH)
     print("Startup complete.")
-
 
 # --- Request / Response Models ---
 
