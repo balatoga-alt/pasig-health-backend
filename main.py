@@ -549,18 +549,31 @@ def list_facilities():
 def search_location(q: str):
     """Proxy Nominatim search to avoid CORS issues in browser."""
     try:
-        encoded = req_lib.utils.quote(q)
-        url = (
-            f"https://nominatim.openstreetmap.org/search"
-            f"?q={encoded}"
-            f"&format=json"
-            f"&limit=5"
-            f"&countrycodes=ph"
-            f"&viewbox=121.04,14.49,121.13,14.65"
-            f"&bounded=0"
-        )
-        response = req_lib.get(url, headers={"User-Agent": "PasigHealthApp/1.0"})
-        return response.json()
+        url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "q": q,
+            "format": "json",
+            "limit": 5,
+            "countrycodes": "ph",
+            "viewbox": "121.04,14.49,121.13,14.65",
+            "bounded": 0,
+        }
+        headers = {
+            "User-Agent": "PasigHealthFinder/1.0 (https://pasig-health-finder.netlify.app)",
+            "Accept-Language": "en",
+            "Accept": "application/json",
+            "Referer": "https://pasig-health-finder.netlify.app",
+        }
+        response = req_lib.get(url, params=params, headers=headers, timeout=10)
+
+        if response.status_code != 200:
+            raise HTTPException(status_code=502, detail="Nominatim returned an error")
+
+        data = response.json()
+        return data if data else []
+
+    except req_lib.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="Search timed out")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
