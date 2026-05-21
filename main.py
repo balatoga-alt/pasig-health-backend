@@ -427,7 +427,7 @@ def _projected_to_latlng(x: float, y: float):
 
 
 def load_node_coordinates_dense(filepath: str) -> dict:
-    """Load node coordinates that are already in lat/lng format."""
+    """Load node coordinates already in lat/lng format from OSMnx."""
     coords = {}
     try:
         df = pd.read_excel(filepath)
@@ -442,16 +442,6 @@ def load_node_coordinates_dense(filepath: str) -> dict:
     except Exception as e:
         print(f"✗ Failed to load node coordinates: {e}")
     return coords
-
-def get_nearest_node(lat: float, lng: float) -> str:
-    best_node = None
-    best_dist = float('inf')
-    for node_id, coords in node_coords_map.items():
-        d = (coords['lat'] - lat) ** 2 + (coords['lng'] - lng) ** 2
-        if d < best_dist:
-            best_dist = d
-            best_node = node_id
-    return best_node
 
 
 def get_node_coords(node_id_str: str) -> dict:
