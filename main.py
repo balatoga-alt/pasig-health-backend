@@ -6,27 +6,20 @@ Uses the BMSSP (Breaking the Sorting Barrier) Algorithm
 import math
 import heapq
 import pandas as pd
-import osmnx as ox
+import requests as req_lib
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from functools import lru_cache
-
-# Simple in-memory cache
-_route_cache = {}
-
-def get_cached_route(user_node: str, facility_node: str):
-    key = (user_node, facility_node)
-    if key not in _route_cache:
-        _route_cache[key] = road_graph.shortest_path_bmssp(user_node, facility_node)
-    return _route_cache[key]
+from starlette.requests import Request
+from starlette.responses import Response
 
 # ============================================================================
-# YOUR BMSSP ALGORITHM (copied directly from ssp_algo.py — do not modify)
+# YOUR BMSSP ALGORITHM (do not modify)
 # ============================================================================
 
 @dataclass
@@ -290,7 +283,7 @@ def _normalize_vertex_id(vertex_id):
 
 
 # ============================================================================
-# SEMI-DIRECTED GRAPH (your original class, unchanged)
+# SEMI-DIRECTED GRAPH
 # ============================================================================
 
 class SemiDirectedGraph:
@@ -363,11 +356,10 @@ class SemiDirectedGraph:
 
 
 # ============================================================================
-# GRAPH LOADER — from your Excel file
+# GRAPH LOADER
 # ============================================================================
 
 def load_graph_from_excel(filepath: str) -> Optional[SemiDirectedGraph]:
-    """Load the SemiDirectedGraph from your Excel edge list."""
     graph = SemiDirectedGraph()
     try:
         df_directed = pd.read_excel(filepath, sheet_name='directed_edges')
@@ -394,30 +386,22 @@ def load_graph_from_excel(filepath: str) -> Optional[SemiDirectedGraph]:
 
 
 # ============================================================================
-# NODE COORDINATE LOOKUP — uses your nodes_with_coordinates.xlsx
-# Coordinates are in EPSG:3857 (Web Mercator) projected format
-# and are converted to lat/lng (EPSG:4326) on load.
+# COORDINATE LOOKUP
 # ============================================================================
 
-import math
+node_coords_map: dict = {}
 
-# Global node coordinate lookup: { "1": {"lat": 14.57, "lng": 121.08}, ... }
+# Route cache — stores previously computed paths for instant retrieval
 _route_cache: dict = {}
 
 
 def _projected_to_latlng(x: float, y: float):
-    """
-    Convert projected coordinates to lat/lng (EPSG:4326).
-    The coordinates use UTM Zone 51N with large false offsets:
-      x_offset = 9503472.38, y_offset = 14503837.33
-    Subtracting these gives standard UTM Zone 51N easting/northing.
-    """
     X_OFFSET = 9503472.38
     Y_OFFSET = 14503837.33
     k0 = 0.9996
     a = 6378137.0
     e2 = 0.00669438
-    lon0 = math.radians(123.0)  # UTM Zone 51N central meridian
+    lon0 = math.radians(123.0)
 
     easting = x - X_OFFSET
     northing = y - Y_OFFSET
@@ -443,7 +427,6 @@ def _projected_to_latlng(x: float, y: float):
 
 
 def load_node_coordinates(filepath: str) -> dict:
-    """Load node coordinates from Excel and return {node_id_str: {lat, lng}}."""
     coords = {}
     try:
         df = pd.read_excel(filepath)
@@ -461,16 +444,19 @@ def load_node_coordinates(filepath: str) -> dict:
 
 
 def get_nearest_node(lat: float, lng: float) -> str:
-    """Find the nearest node ID (string) to a given lat/lng using Euclidean distance."""
     best_node = None
     best_dist = float('inf')
     for node_id, coords in node_coords_map.items():
-        # Simple Euclidean distance on lat/lng (sufficient for nearby points)
         d = (coords['lat'] - lat) ** 2 + (coords['lng'] - lng) ** 2
         if d < best_dist:
             best_dist = d
             best_node = node_id
     return best_node
+
+
+def get_node_coords(node_id_str: str) -> dict:
+    return node_coords_map.get(node_id_str, {"lat": 0.0, "lng": 0.0})
+
 
 def get_cached_route(user_node: str, facility_node: str):
     """Return cached route if available, otherwise compute and cache it."""
@@ -479,30 +465,26 @@ def get_cached_route(user_node: str, facility_node: str):
         _route_cache[key] = road_graph.shortest_path_bmssp(user_node, facility_node)
     return _route_cache[key]
 
-def get_node_coords(node_id_str: str) -> dict:
-    """Returns lat/lng for a node ID string."""
-    return node_coords_map.get(node_id_str, {"lat": 0.0, "lng": 0.0})
-
 
 # ============================================================================
-# HEALTH FACILITIES — add your Pasig City facilities here
+# HEALTH FACILITIES
 # ============================================================================
 
 HEALTH_FACILITIES = [
-    {"name": "Pasig City General Hospital",          "lat": 14.5721974,  "lng": 121.0991899},
-    {"name": "Child's HOPE (Pasig Children's Hospital)", "lat": 14.5617792,  "lng": 121.0743292},
-    {"name": "Rizal Medical Center",                 "lat": 14.5632873,  "lng": 121.0660398},
-    {"name": "Alfonso Specialist Hospital",           "lat": 14.5901372,  "lng": 121.0846938},
-    {"name": "Holylife Hospital",                    "lat": 14.5920681,  "lng": 121.0957120},
-    {"name": "Mission Hospital",                     "lat": 14.5898229,  "lng": 121.0975159},
-    {"name": "Family Healthcare Hospital",            "lat": 14.5832360,  "lng": 121.0851870},
-    {"name": "Pasig Doctors Medical Center",          "lat": 14.6007047,  "lng": 121.0920985},
-    {"name": "Salve Regina General Hospital",         "lat": 14.6199475,  "lng": 121.0963324},
-    {"name": "St. Camillus Medical Center",           "lat": 14.6121254,  "lng": 121.0918480},
-    {"name": "St. Christiana Hospital",               "lat": 14.6039035,  "lng": 121.1028590},
-    {"name": "Tri-city Medical Center",               "lat": 14.5759284,  "lng": 121.0851341},
-    {"name": "The Medical City",                     "lat": 14.5894424,  "lng": 121.0695690},
-    {"name": "Prime Hospital and Medical Center",     "lat": 14.5590693,  "lng": 121.0857886},
+    {"name": "Pasig City General Hospital",           "lat": 14.5721974, "lng": 121.0991899},
+    {"name": "Child's HOPE (Pasig Children's Hospital)", "lat": 14.5617792, "lng": 121.0743292},
+    {"name": "Rizal Medical Center",                  "lat": 14.5632873, "lng": 121.0660398},
+    {"name": "Alfonso Specialist Hospital",            "lat": 14.5901372, "lng": 121.0846938},
+    {"name": "Holylife Hospital",                     "lat": 14.5920681, "lng": 121.0957120},
+    {"name": "Mission Hospital",                      "lat": 14.5898229, "lng": 121.0975159},
+    {"name": "Family Healthcare Hospital",             "lat": 14.5832360, "lng": 121.0851870},
+    {"name": "Pasig Doctors Medical Center",           "lat": 14.6007047, "lng": 121.0920985},
+    {"name": "Salve Regina General Hospital",          "lat": 14.6199475, "lng": 121.0963324},
+    {"name": "St. Camillus Medical Center",            "lat": 14.6121254, "lng": 121.0918480},
+    {"name": "St. Christiana Hospital",                "lat": 14.6039035, "lng": 121.1028590},
+    {"name": "Tri-city Medical Center",                "lat": 14.5759284, "lng": 121.0851341},
+    {"name": "The Medical City",                      "lat": 14.5894424, "lng": 121.0695690},
+    {"name": "Prime Hospital and Medical Center",      "lat": 14.5590693, "lng": 121.0857886},
 ]
 
 
@@ -512,8 +494,16 @@ HEALTH_FACILITIES = [
 
 app = FastAPI(title="Pasig Health Facility Router (BMSSP)")
 
-from fastapi import Response
-from starlette.requests import Request
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Global state ---
+road_graph: Optional[SemiDirectedGraph] = None
+
 
 @app.middleware("http")
 async def handle_head_requests(request: Request, call_next):
@@ -521,31 +511,12 @@ async def handle_head_requests(request: Request, call_next):
         return Response(status_code=200)
     return await call_next(request)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://pasig-health-finder.netlify.app",
-        "http://localhost:8000",
-        "http://localhost:*",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# --- Global state: loaded once at startup ---
-road_graph: Optional[SemiDirectedGraph] = None
-
 
 @app.on_event("startup")
 def startup_event():
     global road_graph, node_coords_map
-
-    # 1. Load your Excel-based road graph
     EXCEL_PATH = "final_edge_layer.xlsx"
     road_graph = load_graph_from_excel(EXCEL_PATH)
-
-    # 2. Load node coordinates from your nodes Excel file
     NODES_PATH = "nodes_with_coordinates.xlsx"
     node_coords_map = load_node_coordinates(NODES_PATH)
     print("Startup complete.")
@@ -574,6 +545,7 @@ class RouteToFacilityRequest(BaseModel):
 def root():
     return {"status": "ok", "service": "Pasig Health Backend"}
 
+
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health_check():
     return {"status": "ok", "graph_loaded": road_graph is not None}
@@ -581,8 +553,27 @@ def health_check():
 
 @app.get("/facilities")
 def list_facilities():
-    """Return all health facilities."""
     return HEALTH_FACILITIES
+
+
+@app.get("/search")
+def search_location(q: str):
+    """Proxy Nominatim search to avoid CORS issues in browser."""
+    try:
+        encoded = req_lib.utils.quote(q)
+        url = (
+            f"https://nominatim.openstreetmap.org/search"
+            f"?q={encoded}"
+            f"&format=json"
+            f"&limit=5"
+            f"&countrycodes=ph"
+            f"&viewbox=121.04,14.49,121.13,14.65"
+            f"&bounded=0"
+        )
+        response = req_lib.get(url, headers={"User-Agent": "PasigHealthApp/1.0"})
+        return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
 @app.post("/nearest-facility")
@@ -591,8 +582,6 @@ def nearest_facility(req: LocationRequest):
         raise HTTPException(status_code=503, detail="Road graph not loaded")
 
     user_node = get_nearest_node(req.lat, req.lng)
-
-    from concurrent.futures import ThreadPoolExecutor
 
     def compute_facility_route(facility):
         try:
@@ -637,9 +626,6 @@ def nearest_facility(req: LocationRequest):
 
 @app.post("/route-to-facility")
 def route_to_specific_facility(req: RouteToFacilityRequest):
-    """
-    Route to a specific facility chosen by the user.
-    """
     if road_graph is None:
         raise HTTPException(status_code=503, detail="Road graph not loaded")
 
