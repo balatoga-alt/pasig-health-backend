@@ -547,30 +547,46 @@ def list_facilities():
 
 @app.get("/search")
 def search_location(q: str):
-    """Proxy Nominatim search to avoid CORS issues in browser."""
+    """Proxy Photon geocoding search — free, no API key, OSM-based."""
     try:
-        url = "https://nominatim.openstreetmap.org/search"
+        url = "https://photon.komoot.io/api/"
         params = {
-            "q": q,
-            "format": "json",
+            "q": f"{q} Pasig City Philippines",
             "limit": 5,
-            "countrycodes": "ph",
-            "viewbox": "121.04,14.49,121.13,14.65",
-            "bounded": 0,
+            "lang": "en",
+            "bbox": "121.04,14.49,121.13,14.65",  # Pasig City bounding box
         }
         headers = {
-            "User-Agent": "PasigHealthFinder/1.0 (https://pasig-health-finder.netlify.app)",
-            "Accept-Language": "en",
+            "User-Agent": "PasigHealthFinder/1.0",
             "Accept": "application/json",
-            "Referer": "https://pasig-health-finder.netlify.app",
         }
         response = req_lib.get(url, params=params, headers=headers, timeout=10)
 
         if response.status_code != 200:
-            raise HTTPException(status_code=502, detail="Nominatim returned an error")
+            raise HTTPException(status_code=502, detail="Geocoding service error")
 
         data = response.json()
-        return data if data else []
+        features = data.get("features", [])
+
+        # Convert Photon format to match what Flutter expects
+        results = []
+        for f in features:
+            props = f.get("properties", {})
+            coords = f.get("geometry", {}).get("coordinates", [])
+            if len(coords) >= 2:
+                name_parts = []
+                for key in ["name", "street", "district", "city", "state", "country"]:
+                    val = props.get(key)
+                    if val:
+                        name_parts.append(val)
+                display_name = ", ".join(name_parts)
+                results.append({
+                    "display_name": display_name,
+                    "lat": str(coords[1]),
+                    "lon": str(coords[0]),
+                })
+
+        return results
 
     except req_lib.exceptions.Timeout:
         raise HTTPException(status_code=504, detail="Search timed out")
