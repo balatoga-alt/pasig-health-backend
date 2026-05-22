@@ -427,6 +427,23 @@ def _projected_to_latlng(x: float, y: float):
     return math.degrees(lat), math.degrees(lon)
 
 
+def load_node_coordinates(filepath: str) -> dict:
+    coords = {}
+    try:
+        df = pd.read_excel(filepath)
+        df.columns = df.columns.str.strip()
+        for _, row in df.iterrows():
+            node_id = str(int(row['node_id']))
+            x = float(row['x'])
+            y = float(row['y'])
+            lat, lng = _projected_to_latlng(x, y)
+            coords[node_id] = {"lat": lat, "lng": lng}
+        print(f"✓ Node coordinates loaded: {len(coords)} nodes")
+    except Exception as e:
+        print(f"✗ Failed to load node coordinates: {e}")
+    return coords
+
+
 def load_node_coordinates_dense(filepath: str) -> dict:
     """Load node coordinates already in lat/lng format from OSMnx."""
     coords = {}
@@ -434,16 +451,26 @@ def load_node_coordinates_dense(filepath: str) -> dict:
         df = pd.read_excel(filepath)
         df.columns = df.columns.str.strip()
         for _, row in df.iterrows():
-            # Convert to int first to remove .0, then to string
             node_id = str(int(float(row['node_id'])))
             coords[node_id] = {
-                "lat": float(row['lat']),
-                "lng": float(row['lng'])
+                'lat': float(row['lat']),
+                'lng': float(row['lng'])
             }
-        print(f"✓ Node coordinates loaded: {len(coords)} nodes")
+        print(f'✓ Node coordinates loaded: {len(coords)} nodes')
     except Exception as e:
-        print(f"✗ Failed to load node coordinates: {e}")
+        print(f'✗ Failed to load node coordinates: {e}')
     return coords
+
+
+def get_nearest_node(lat: float, lng: float) -> str:
+    best_node = None
+    best_dist = float('inf')
+    for node_id, coords in node_coords_map.items():
+        d = (coords['lat'] - lat) ** 2 + (coords['lng'] - lng) ** 2
+        if d < best_dist:
+            best_dist = d
+            best_node = node_id
+    return best_node
 
 
 def get_node_coords(node_id_str: str) -> dict:
@@ -513,6 +540,7 @@ def startup_event():
     node_coords_map = load_node_coordinates_dense(NODES_PATH)
     print("Startup complete.")
 
+
 # --- Request / Response Models ---
 
 class LocationRequest(BaseModel):
@@ -549,49 +577,20 @@ def list_facilities():
 
 @app.get("/search")
 def search_location(q: str):
-    """Proxy Photon geocoding search — free, no API key, OSM-based."""
+    """Proxy Nominatim search to avoid CORS issues in browser."""
     try:
-        url = "https://photon.komoot.io/api/"
-        params = {
-            "q": f"{q} Pasig City Philippines",
-            "limit": 5,
-            "lang": "en",
-            "bbox": "121.04,14.49,121.13,14.65",  # Pasig City bounding box
-        }
-        headers = {
-            "User-Agent": "PasigHealthFinder/1.0",
-            "Accept": "application/json",
-        }
-        response = req_lib.get(url, params=params, headers=headers, timeout=10)
-
-        if response.status_code != 200:
-            raise HTTPException(status_code=502, detail="Geocoding service error")
-
-        data = response.json()
-        features = data.get("features", [])
-
-        # Convert Photon format to match what Flutter expects
-        results = []
-        for f in features:
-            props = f.get("properties", {})
-            coords = f.get("geometry", {}).get("coordinates", [])
-            if len(coords) >= 2:
-                name_parts = []
-                for key in ["name", "street", "district", "city", "state", "country"]:
-                    val = props.get(key)
-                    if val:
-                        name_parts.append(val)
-                display_name = ", ".join(name_parts)
-                results.append({
-                    "display_name": display_name,
-                    "lat": str(coords[1]),
-                    "lon": str(coords[0]),
-                })
-
-        return results
-
-    except req_lib.exceptions.Timeout:
-        raise HTTPException(status_code=504, detail="Search timed out")
+        encoded = req_lib.utils.quote(q)
+        url = (
+            f"https://nominatim.openstreetmap.org/search"
+            f"?q={encoded}"
+            f"&format=json"
+            f"&limit=5"
+            f"&countrycodes=ph"
+            f"&viewbox=121.04,14.49,121.13,14.65"
+            f"&bounded=0"
+        )
+        response = req_lib.get(url, headers={"User-Agent": "PasigHealthApp/1.0"})
+        return response.json()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
@@ -603,43 +602,40 @@ def nearest_facility(req: LocationRequest):
 
     user_node = get_nearest_node(req.lat, req.lng)
 
-    def compute_facility_route(facility):
+    best_result = None
+    best_distance = float("inf")
+
+    for facility in HEALTH_FACILITIES:
         try:
             facility_node = get_nearest_node(facility["lat"], facility["lng"])
             result = get_cached_route(user_node, facility_node)
             if result is None:
-                return None
+                continue
             distance, path_node_ids = result
-            path_coords = []
-            for node_id_str in path_node_ids:
-                try:
-                    coords = get_node_coords(node_id_str)
-                    path_coords.append(coords)
-                except Exception:
-                    continue
-            return {
-                "facility": facility["name"],
-                "distance": round(distance, 4),
-                "path": path_coords,
-                "destination": {
-                    "lat": facility["lat"],
-                    "lng": facility["lng"],
-                },
-                "_distance_raw": distance
-            }
-        except Exception:
-            return None
+            if distance < best_distance:
+                best_distance = distance
+                path_coords = []
+                for node_id_str in path_node_ids:
+                    try:
+                        coords = get_node_coords(node_id_str)
+                        path_coords.append(coords)
+                    except Exception:
+                        continue
+                best_result = {
+                    "facility": facility["name"],
+                    "distance": round(distance, 4),
+                    "path": path_coords,
+                    "destination": {
+                        "lat": facility["lat"],
+                        "lng": facility["lng"],
+                    },
+                }
+        except Exception as e:
+            print(f"Error routing to {facility['name']}: {e}")
+            continue
 
-    with ThreadPoolExecutor(max_workers=14) as executor:
-        results = list(executor.map(compute_facility_route, HEALTH_FACILITIES))
-
-    valid_results = [r for r in results if r is not None]
-
-    if not valid_results:
+    if best_result is None:
         raise HTTPException(status_code=404, detail="No reachable facility found")
-
-    best_result = min(valid_results, key=lambda x: x["_distance_raw"])
-    best_result.pop("_distance_raw")
 
     return best_result
 
