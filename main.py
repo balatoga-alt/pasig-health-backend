@@ -576,23 +576,45 @@ def list_facilities():
 
 
 @app.get("/search")
-def search_location(q: str):
-    """Proxy Nominatim search to avoid CORS issues in browser."""
+async def search_location(q: str):
+    url = "https://photon.komoot.io/api/"
+    params = {
+        "q": q,
+        "limit": 5,
+        "bbox": "121.04,14.49,121.13,14.65",  # Pasig City bounding box
+        "lang": "en"
+    }
+    headers = {"User-Agent": "PasigHealthApp/1.0"}
+    
     try:
-        encoded = req_lib.utils.quote(q)
-        url = (
-            f"https://nominatim.openstreetmap.org/search"
-            f"?q={encoded}"
-            f"&format=json"
-            f"&limit=5"
-            f"&countrycodes=ph"
-            f"&viewbox=121.04,14.49,121.13,14.65"
-            f"&bounded=0"
-        )
-        response = req_lib.get(url, headers={"User-Agent": "PasigHealthApp/1.0"})
-        return response.json()
+        response = req_lib.get(url, params=params, headers=headers, timeout=10)
+        data = response.json()
+        
+        # Convert Photon GeoJSON to flat format your Flutter app expects
+        results = []
+        for feature in data.get("features", []):
+            props = feature.get("properties", {})
+            coords = feature.get("geometry", {}).get("coordinates", [0, 0])
+            
+            # Build a display name from available properties
+            parts = [
+                props.get("name", ""),
+                props.get("street", ""),
+                props.get("city", ""),
+                props.get("state", ""),
+                props.get("country", ""),
+            ]
+            display_name = ", ".join(p for p in parts if p)
+            
+            results.append({
+                "display_name": display_name,
+                "lat": str(coords[1]),
+                "lon": str(coords[0]),
+            })
+        
+        return results
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/nearest-facility")
