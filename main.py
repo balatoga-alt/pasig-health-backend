@@ -538,6 +538,15 @@ def startup_event():
     road_graph = load_graph_from_excel(EXCEL_PATH)
     NODES_PATH = "nodes_with_coordinates_dense.xlsx"
     node_coords_map = load_node_coordinates_dense(NODES_PATH)
+
+    # ← Pre-snap all facility nodes and log them
+    print("\n--- Pre-snapping facility nodes ---")
+    for facility in HEALTH_FACILITIES:
+        node = get_nearest_node(facility["lat"], facility["lng"])
+        coords = get_node_coords(node)
+        print(f"  {facility['name']} → node {node} @ ({coords['lat']:.5f}, {coords['lng']:.5f})")
+    print("-----------------------------------\n")
+
     print("Startup complete.")
 
 
@@ -645,6 +654,7 @@ def nearest_facility(req: LocationRequest):
         raise HTTPException(status_code=503, detail="Road graph not loaded")
 
     user_node = get_nearest_node(req.lat, req.lng)
+    print(f"✓ User snapped to node: {user_node}")
 
     best_result = None
     best_distance = float("inf")
@@ -652,10 +662,17 @@ def nearest_facility(req: LocationRequest):
     for facility in HEALTH_FACILITIES:
         try:
             facility_node = get_nearest_node(facility["lat"], facility["lng"])
+            print(f"  → {facility['name']} snapped to node: {facility_node}")  # ← add
+
             result = get_cached_route(user_node, facility_node)
+
             if result is None:
+                print(f"  ✗ No path found to {facility['name']}")  # ← add
                 continue
+
             distance, path_node_ids = result
+            print(f"  ✓ Path found to {facility['name']}: {round(distance, 1)}m")  # ← add
+
             if distance < best_distance:
                 best_distance = distance
                 path_coords = []
@@ -675,7 +692,7 @@ def nearest_facility(req: LocationRequest):
                     },
                 }
         except Exception as e:
-            print(f"Error routing to {facility['name']}: {e}")
+            print(f"  ✗ Error routing to {facility['name']}: {e}")
             continue
 
     if best_result is None:
