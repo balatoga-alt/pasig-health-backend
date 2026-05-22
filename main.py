@@ -577,45 +577,66 @@ def list_facilities():
 
 @app.get("/search")
 async def search_location(q: str):
-    url = "https://photon.komoot.io/api/"
-    params = {
-        "q": q,
-        "limit": 5,
-        "lang": "en",
-        "lat": 14.5764,   # Pasig City center — biases results toward here
-        "lon": 121.0851,
-    }
     headers = {"User-Agent": "PasigHealthApp/1.0"}
-    
+
+    # ---- Try Photon first ----
     try:
-        response = req_lib.get(url, params=params, headers=headers, timeout=10)
-        data = response.json()
-        
-        # Convert Photon GeoJSON to flat format your Flutter app expects
-        results = []
-        for feature in data.get("features", []):
-            props = feature.get("properties", {})
-            coords = feature.get("geometry", {}).get("coordinates", [0, 0])
-            
-            # Build a display name from available properties
-            parts = [
-                props.get("name", ""),
-                props.get("street", ""),
-                props.get("city", ""),
-                props.get("state", ""),
-                props.get("country", ""),
-            ]
-            display_name = ", ".join(p for p in parts if p)
-            
-            results.append({
-                "display_name": display_name,
-                "lat": str(coords[1]),
-                "lon": str(coords[0]),
-            })
-        
-        return results
+        photon_res = req_lib.get(
+            "https://photon.komoot.io/api/",
+            params={"q": q, "limit": 5, "lang": "en", "lat": 14.5764, "lon": 121.0851},
+            headers=headers,
+            timeout=10
+        )
+        features = photon_res.json().get("features", [])
+
+        if features:
+            results = []
+            for feature in features:
+                props = feature.get("properties", {})
+                coords = feature.get("geometry", {}).get("coordinates", [0, 0])
+                parts = [
+                    props.get("name", ""),
+                    props.get("street", ""),
+                    props.get("city", ""),
+                    props.get("state", ""),
+                    props.get("country", ""),
+                ]
+                display_name = ", ".join(p for p in parts if p)
+                results.append({
+                    "display_name": display_name,
+                    "lat": str(coords[1]),
+                    "lon": str(coords[0]),
+                })
+            return results
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Photon failed: {e}")
+
+    # ---- Fall back to Nominatim if Photon returns nothing ----
+    try:
+        nom_res = req_lib.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={
+                "q": f"{q}, Pasig City, Philippines",
+                "format": "json",
+                "limit": 5,
+                "countrycodes": "ph",
+                "viewbox": "121.04,14.49,121.13,14.65",
+                "bounded": 0
+            },
+            headers=headers,
+            timeout=10
+        )
+        data = nom_res.json()
+        return [
+            {
+                "display_name": item["display_name"],
+                "lat": item["lat"],
+                "lon": item["lon"],
+            }
+            for item in data
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Both Photon and Nominatim failed: {e}")
 
 
 @app.post("/nearest-facility")
