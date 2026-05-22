@@ -277,9 +277,10 @@ class BmsspSolver:
 
 
 def _normalize_vertex_id(vertex_id):
-    if isinstance(vertex_id, (int, float)) and vertex_id == int(vertex_id):
-        return str(int(vertex_id))
-    return str(vertex_id)
+    try:
+        return str(int(float(vertex_id)))
+    except (ValueError, TypeError):
+        return str(vertex_id)
 
 
 # ============================================================================
@@ -433,7 +434,8 @@ def load_node_coordinates_dense(filepath: str) -> dict:
         df = pd.read_excel(filepath)
         df.columns = df.columns.str.strip()
         for _, row in df.iterrows():
-            node_id = str(row['node_id'])
+            # Convert to int first to remove .0, then to string
+            node_id = str(int(float(row['node_id'])))
             coords[node_id] = {
                 "lat": float(row['lat']),
                 "lng": float(row['lng'])
