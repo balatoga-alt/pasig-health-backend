@@ -581,8 +581,9 @@ async def search_location(q: str):
     params = {
         "q": q,
         "limit": 5,
-        "bbox": "121.04,14.49,121.13,14.65",  # Pasig City bounding box
-        "lang": "en"
+        "lang": "en",
+        "lat": 14.5764,   # Pasig City center — biases results toward here
+        "lon": 121.0851,
     }
     headers = {"User-Agent": "PasigHealthApp/1.0"}
     
