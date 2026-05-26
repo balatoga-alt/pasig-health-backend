@@ -512,6 +512,10 @@ HEALTH_FACILITIES = [
 # ============================================================================
 
 app = FastAPI(title="Pasig Health Facility Router (BMSSP)")
+# ── Location Mode Toggle ──────────────────────────────────────────────────────
+# Set to True  → app uses GPS (browser geolocation) automatically
+# Set to False → app uses search bar (manual barangay/street input)
+USE_GPS_MODE = False
 
 app.add_middleware(
     CORSMiddleware,
@@ -523,6 +527,9 @@ app.add_middleware(
 # --- Global state ---
 road_graph: Optional[SemiDirectedGraph] = None
 
+@app.get("/config")
+def get_config():
+    return {"use_gps": USE_GPS_MODE}
 
 @app.middleware("http")
 async def handle_head_requests(request: Request, call_next):
