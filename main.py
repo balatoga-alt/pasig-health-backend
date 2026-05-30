@@ -519,7 +519,13 @@ USE_GPS_MODE = False
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://pasig-health-finder.balatoga.workers.dev",
+        "https://pasig-health-finder.netlify.app",
+        "http://localhost:8000",
+        "http://localhost:*",
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
